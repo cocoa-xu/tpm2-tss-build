@@ -1,0 +1,102 @@
+name: linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      verison:
+        description: 'TPM2-TSS Version (X.Y.Z)'
+        required: true
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.verison }}-${{ matrix.job.arch }}-linux-${{ matrix.job.abi }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        job: 
+          - { arch: "x86_64", abi: "gnu", image: "ubuntu:20.04", platform: "linux/amd64" }
+          - { arch: "aarch64", abi: "gnu", image: "ubuntu:20.04", platform: "linux/arm64/v8" }
+          - { arch: "armv7l", abi: "gnueabihf", image: "arm32v7/ubuntu:20.04", platform: "linux/arm32/v7" }
+          - { arch: "riscv64", abi: "gnu", image: "ubuntu:20.04", platform: "linux/riscv64" }
+
+    name: ${{ matrix.job.arch }}-linux-${{ matrix.job.abi }}
+
+    steps:
+      - name: Build Check
+        id: build-check
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            export VERSION_V=${GITHUB_REF##*/v}
+          else
+            export VERSION_V=${{ inputs.verison }}
+          fi
+          export VERSION="${VERSION_V#v}"
+
+          echo "build=true" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "target=${{ matrix.job.arch }}-linux-${{ matrix.job.abi }}" >> $GITHUB_OUTPUT
+
+      - name: Checkout
+        if: steps.build-check.outputs.build == 'true'
+        uses: actions/checkout@v4
+
+      - name: Pull docker image
+        if: steps.build-check.outputs.build == 'true'
+        run: |
+          sudo docker pull --platform="${{ matrix.job.platform }}" "${{ matrix.job.image }}"
+          if [ "${{ matrix.job.arch }}" != "$(uname -m)" ]; then
+            sudo apt-get update
+            sudo apt-get install -y binfmt-support qemu-user-static
+          fi
+          sudo docker image ls "${{ matrix.job.image }}"
+
+      - name: Cache TPM2-TSS Source Code
+        if: steps.build-check.outputs.build == 'true'
+        id: cache-tpm2-tss
+        uses: actions/cache@v4
+        with:
+          key: tpm2-tss-${{ steps.build-check.outputs.version }}
+          path: |
+            ./tpm2-tss-${{ steps.build-check.outputs.version }}.tar.gz
+
+      - name: Download TPM2-TSS Source Code
+        if: steps.build-check.outputs.build == 'true' && steps.cache-tpm2-tss.outputs.cache-hit != 'true'
+        run: |
+          export VERSION=${{ steps.build-check.outputs.version }}
+          export SRC_FILENAME="tpm2-tss-${VERSION}.tar.gz"
+          curl -fSL "https://github.com/tpm2-software/tpm2-tss/releases/download/${VERSION}/${SRC_FILENAME}" -o "${SRC_FILENAME}"
+
+      - name: Compile TPM2-TSS
+        if: steps.build-check.outputs.build == 'true'
+        run: |
+          cp ./.github/*.sh .
+          chmod +x *.sh
+
+          ./script-to-build-gnu.sh "${{ steps.build-check.outputs.version }}" "${{ matrix.job.arch }}" "${{ matrix.job.abi }}" "${{ matrix.job.image }}" "${{ matrix.job.platform }}"
+
+      - name: Attest
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            artifact/*.tar.gz
+            artifact/*.sha512
+
+      - uses: softprops/action-gh-release@v2
+        if: steps.build-check.outputs.build == 'true'
+        with:
+          tag_name: v${{ steps.build-check.outputs.version }}
+          name: v${{ steps.build-check.outputs.version }}
+          files: |
+            artifact/*.tar.gz
+            artifact/*.sha512
