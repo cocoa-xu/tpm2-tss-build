@@ -27,7 +27,7 @@ jobs:
         job: 
           - { arch: "x86_64", abi: "gnu", image: "ubuntu:20.04", platform: "linux/amd64" }
           - { arch: "aarch64", abi: "gnu", image: "ubuntu:20.04", platform: "linux/arm64/v8" }
-          - { arch: "armv7l", abi: "gnueabihf", image: "arm32v7/ubuntu:20.04", platform: "linux/arm32/v7" }
+          - { arch: "armv7l", abi: "gnueabihf", image: "arm32v7/ubuntu:20.04", platform: "linux/arm/v7" }
           - { arch: "riscv64", abi: "gnu", image: "ubuntu:20.04", platform: "linux/riscv64" }
 
     name: ${{ matrix.job.arch }}-linux-${{ matrix.job.abi }}
